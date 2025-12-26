@@ -330,28 +330,42 @@ public abstract class AbstractSemiblockEntity extends Entity implements ISemiBlo
     }
 
     @Override
-    public void onRemovedFromLevel() {
-        Level level = level();
-        if (!level.isClientSide) {
-            Direction dir = IDirectionalSemiblock.getDirection(this);
-            SemiblockTracker.getInstance().clearSemiblock(level, blockPos, dir);
+public void onRemovedFromLevel() {
+    Level level = level();
+    if (!level.isClientSide) {
+        Direction dir = IDirectionalSemiblock.getDirection(this);
+        SemiblockTracker.getInstance().clearSemiblock(level, blockPos, dir);
 
-            NeoForge.EVENT_BUS.post(new SemiblockEvent.BreakEvent(level, blockPos, this));
+        NeoForge.EVENT_BUS.post(new SemiblockEvent.BreakEvent(level, blockPos, this));
 
-            if (beingRemoved) {
-                getDrops().forEach(this::dropItem);
-            }
-
-            if (level.getChunk(blockPos.getX() >> 4, blockPos.getZ() >> 4, ChunkStatus.FULL, false) instanceof LevelChunk lc) {
-                level.markAndNotifyBlock(blockPos, lc, getBlockState(), getBlockState(), Block.UPDATE_ALL, 512);
-            }
+        if (beingRemoved) {
+            getDrops().forEach(this::dropItem);
         }
 
-        doExtraCleanupTasks(beingRemoved);
+        // Chunk may be in the middle of demotion/unload here (TP away, tracking end).
+        // On some server stacks (e.g., Arclight + mixins) getChunk/getChunkAt can throw
+        // IllegalStateException: "Unloaded chunk".
+        try {
+            // Fast pre-check; still not a guarantee, but avoids work in the common case.
+            if (level.isLoaded(blockPos)) {
+                int cx = blockPos.getX() >> 4;
+                int cz = blockPos.getZ() >> 4;
 
-        super.onRemovedFromLevel();
+                // Do NOT force-load; only proceed if a FULL chunk is present.
+                if (level.getChunk(cx, cz, ChunkStatus.FULL, false) instanceof LevelChunk lc) {
+                    BlockState state = getBlockState();
+                    level.markAndNotifyBlock(blockPos, lc, state, state, Block.UPDATE_ALL, 512);
+                }
+            }
+        } catch (IllegalStateException ignored) {
+            // Chunk is not there / unloading; nothing meaningful to notify.
+        }
     }
 
+    doExtraCleanupTasks(beingRemoved);
+
+    super.onRemovedFromLevel();
+}
     /**
      * Called by onRemovedFromWorld() to finalize semiblock removal. Override in subclasses.
      * @param removingSemiblock true if this semiblock is actually being removed from world, false if removing to chunk unloading
